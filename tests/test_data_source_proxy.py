@@ -137,12 +137,23 @@ class DataSourceProxyTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 normalize_data_source_proxy_url(value)
 
-    def test_compose_translates_loopback_to_host_gateway_name(self):
-        resolved = resolve_data_source_proxy_url({
-            PROXY_ENV_NAME: "socks5h://127.0.0.1:10800",
-            "NIUONE_CONTAINER_DATA_DIR": "/data",
-        })
-        self.assertEqual(resolved, "socks5h://host.docker.internal:10800")
+    def test_compose_translates_loopback_to_current_network_gateway(self):
+        with mock.patch(
+            "app.market_data.data_source_proxy._container_default_gateway",
+            return_value="172.18.0.1",
+        ):
+            resolved = resolve_data_source_proxy_url({
+                PROXY_ENV_NAME: "socks5h://127.0.0.1:10800",
+                "NIUONE_CONTAINER_DATA_DIR": "/data",
+            })
+        self.assertEqual(resolved, "socks5h://172.18.0.1:10800")
+
+    def test_container_gateway_parses_linux_route_hex(self):
+        from app.market_data.data_source_proxy import _container_default_gateway
+
+        route = "Iface\tDestination\tGateway\tFlags\neth0\t00000000\t010012AC\t0003\n"
+        with mock.patch("builtins.open", mock.mock_open(read_data=route)):
+            self.assertEqual(_container_default_gateway(), "172.18.0.1")
 
 
 if __name__ == "__main__":

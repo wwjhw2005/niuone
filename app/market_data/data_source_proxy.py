@@ -65,8 +65,31 @@ def _configured_proxy(env: Mapping[str, str] | None = None) -> Socks5hProxy | No
     host = str(parsed.hostname or "")
     # A Compose container cannot reach the host through its own loopback.
     if values.get("NIUONE_CONTAINER_DATA_DIR") and host in {"127.0.0.1", "localhost", "::1"}:
-        host = "host.docker.internal"
+        host = _container_default_gateway() or "host.docker.internal"
     return Socks5hProxy(host=host, port=int(parsed.port or 0))
+
+
+def _container_default_gateway(route_path: str = "/proc/net/route") -> str:
+    """Return the current Linux container gateway without assuming a Docker subnet."""
+
+    try:
+        with open(route_path, encoding="ascii") as route_file:
+            rows = route_file.read().splitlines()[1:]
+    except OSError:
+        return ""
+    for row in rows:
+        fields = row.split()
+        if len(fields) < 4 or fields[1] != "00000000":
+            continue
+        try:
+            flags = int(fields[3], 16)
+            packed = struct.pack("<L", int(fields[2], 16))
+            gateway = socket.inet_ntoa(packed)
+        except (OSError, ValueError, struct.error):
+            continue
+        if flags & 0x2 and gateway != "0.0.0.0":
+            return gateway
+    return ""
 
 
 def resolve_data_source_proxy_url(env: Mapping[str, str] | None = None) -> str:
