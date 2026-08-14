@@ -11,7 +11,9 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from typing import Any, Callable
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+from .data_source_proxy import data_source_urlopen
 
 from .eastmoney_turnover import (
     FALLBACK_SOURCE_NAME as TURNOVER_FALLBACK_SOURCE_NAME,
@@ -98,7 +100,7 @@ def _download_previous_turnover(secid: str, timeout: float) -> str:
             "Connection": "close",
         },
     )
-    with urlopen(request, timeout=max(1.0, timeout)) as response:
+    with data_source_urlopen(request, timeout=max(1.0, timeout)) as response:
         return response.read().decode("utf-8", errors="ignore")
 
 
@@ -399,7 +401,7 @@ def _download_chunk(symbols: list[str], timeout: float) -> str:
             "Connection": "close",
         },
     )
-    with urlopen(request, timeout=max(1.0, timeout)) as response:
+    with data_source_urlopen(request, timeout=max(1.0, timeout)) as response:
         return response.read().decode("gb18030", errors="ignore")
 
 

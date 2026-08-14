@@ -7,6 +7,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
+
 from dashboard_json_cache import read_json_cache, write_json_cache
 from niuone_paths import get_dashboard_home
 
@@ -30,7 +35,7 @@ def market_prefix(code):
 
 def _urlopen(url, timeout=10):
     req = urllib.request.Request(url, headers=UA)
-    return urllib.request.urlopen(req, timeout=timeout).read()
+    return data_source_urlopen(req, timeout=timeout).read()
 
 
 def _parse_qt_line(line):

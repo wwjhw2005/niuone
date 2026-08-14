@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
+
+try:
     from app.core.json_cache import read_json_cache, write_json_cache
 except ImportError:  # pragma: no cover - standalone entrypoints add app/ to sys.path
     from core.json_cache import read_json_cache, write_json_cache
@@ -248,7 +253,7 @@ def _download_payload(
 def fetch_eastmoney_board_snapshot(
     *,
     timeout_seconds: float = EASTMONEY_BOARD_TIMEOUT_SECONDS,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = data_source_urlopen,
     now: datetime | None = None,
 ) -> EastmoneyBoardSnapshot:
     """Fetch one complete current snapshot with bounded paging and host fallback."""

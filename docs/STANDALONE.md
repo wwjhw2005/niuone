@@ -175,6 +175,7 @@ NiuOne 的盘面总结和买卖决策需要接入大模型。美股机构评级�
 | `DASHBOARD_KLINE_BOOTSTRAP_ENABLED` | `1` | 首次部署或缓存过期后立即准备全市场日 K；重启生效 |
 | `DASHBOARD_KLINE_READINESS_MIN_COVERAGE_PERCENT` | `90` | 实战扫描放行所需的日期有效日 K 覆盖率；允许 90～100，重启生效 |
 | `DASHBOARD_TENCENT_QUOTE_STAGE_TIMEOUT_SECONDS` | `90` | 全市场实时行情阶段总预算；允许 15～300 秒，重启生效 |
+| `DASHBOARD_CN_DATA_PROXY_URL` | 空 | 可选国内数据源代理，格式为不含凭据的 `socks5h://host:port`；运行时热生效，Docker 中回环地址自动映射宿主机 |
 | `DASHBOARD_MANUAL_DATA_INITIALIZATION_TIMEOUT_SECONDS` | `660` | 手动任务等待日 K 初始化完成的最长秒数；重启生效 |
 | `DASHBOARD_DECISION_INTELLIGENCE_ENABLED` | `1` | 买卖决策是否启用全局情报包 |
 | `DASHBOARD_TRADE_DISCIPLINE_TEXT` | 空 | 买卖决策 prompt 的交易纪律文本；为空使用内置默认纪律 |

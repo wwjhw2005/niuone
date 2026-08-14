@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
+
 
 EASTMONEY_CONCEPT_BOARD_URLS = (
     "https://push2delay.eastmoney.com/api/qt/clist/get",
@@ -254,7 +259,7 @@ def _download_payload(
 def fetch_eastmoney_concept_board_signal(
     *,
     timeout_seconds: float = EASTMONEY_CONCEPT_BOARD_TIMEOUT_SECONDS,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] = data_source_urlopen,
     now: datetime | None = None,
 ) -> EastmoneyConceptBoardSignal:
     """Fetch the first 100 concepts ranked by current change percentage."""

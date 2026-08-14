@@ -18,6 +18,11 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
+try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
+
 SSL_CTX = ssl._create_unverified_context()
 UA = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.qq.com/"}
 
@@ -120,7 +125,7 @@ def _compact_minute_line(points):
 
 def _open(url, timeout=8, headers=None):
     req = urllib.request.Request(url, headers=headers or UA)
-    return urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX).read()
+    return data_source_urlopen(req, timeout=timeout, context=SSL_CTX).read()
 
 
 def _qt_query(codes):

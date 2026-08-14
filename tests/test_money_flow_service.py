@@ -261,6 +261,31 @@ class MoneyFlowServiceTests(unittest.TestCase):
         self.assertEqual(payload["data"]["total"], 1)
         self.assertEqual(len(calls), 2)
         self.assertEqual(sleeps, [money_flow_service.REQUEST_RETRY_DELAYS_SECONDS[0]])
+    def test_download_json_passes_configured_socks5h_proxy_to_curl(self):
+        calls = []
+
+        def fake_runner(command, **kwargs):
+            calls.append((command, kwargs))
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"data": {"total": 1, "diff": []}}).encode("utf-8"),
+                stderr=b"",
+            )
+
+        with patch.object(
+            money_flow_service,
+            "resolve_data_source_proxy_url",
+            return_value="socks5h://127.0.0.1:10800",
+        ):
+            money_flow_service._download_json(
+                "https://example.test/data",
+                runner=fake_runner,
+                curl_path="/usr/bin/curl",
+            )
+
+        command = calls[0][0]
+        proxy_index = command.index("--proxy")
+        self.assertEqual(command[proxy_index + 1], "socks5h://127.0.0.1:10800")
 
     def test_new_cache_name_does_not_reuse_legacy_total_flow_file(self):
         self.assertEqual(money_flow_service.CACHE_TTL, 60)

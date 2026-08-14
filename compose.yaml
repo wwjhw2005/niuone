@@ -17,6 +17,8 @@ x-niuone-common: &niuone-common
   environment: *niuone-environment
   volumes:
     - niuone-data:/data
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
 
 services:
   dashboard:

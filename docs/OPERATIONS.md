@@ -169,6 +169,7 @@ NiuOne 需要大模型驱动完整交易决策工作流。设置页的“模型�
 
 | 配置 | 默认值 | 可选范围 | 生效方式 |
 |---|---:|---:|---|
+| `DASHBOARD_CN_DATA_PROXY_URL` | 空 | `socks5h://host:port`，不允许凭据 | 运行时热应用；仅用于国内行情和问财请求 |
 | `DASHBOARD_INDICES_TTL_SECONDS` | `60` | 大于 0 秒 | 运行时热应用 |
 | `DASHBOARD_NIUONE_MAINLINE_MINUTE_REFRESH_ENABLED` | `1` | `0` 或 `1` | 重启 Dashboard 后生效 |
 | `DASHBOARD_MARKET_BREADTH_SAMPLE_INTERVAL_SECONDS` | `30` | `30`～`600` 秒 | 重启 Dashboard 后生效 |
@@ -179,6 +180,8 @@ NiuOne 需要大模型驱动完整交易决策工作流。设置页的“模型�
 | `DASHBOARD_INDUSTRY_FLOW_MORNING_END` | `11:31` | 北京时间 `HH:MM` | 运行时热应用；后台下一轮判断生效 |
 | `DASHBOARD_INDUSTRY_FLOW_AFTERNOON_START` | `13:00` | 北京时间 `HH:MM` | 运行时热应用；后台下一轮判断生效 |
 | `DASHBOARD_INDUSTRY_FLOW_AFTERNOON_END` | `15:01` | 北京时间 `HH:MM` | 运行时热应用；后台下一轮判断生效 |
+
+海外服务器可通过 `DASHBOARD_CN_DATA_PROXY_URL` 为腾讯、东方财富、新浪和问财请求指定 SOCKS5H 代理，例如 `socks5h://127.0.0.1:10800`。域名解析在代理端完成；配置不影响模型、通知、FMP 或 NewsNow。Docker Compose 部署中若填写回环地址，容器会自动改用 `host.docker.internal`，Compose 已声明宿主机映射。代理不可用时请求按现有有界超时和重试失败并使用各数据源既有缓存降级，不会静默绕过代理直连。
 
 行业资金流默认只在 A 股交易日北京时间 09:25～11:31、13:00～15:01 采样，可在设置页分别修改四个边界时间。保存时必须满足“上午开始 < 上午结束 < 下午开始 < 下午结束”。调整采样窗口或间隔不会删除已经保存的真实采样点；窗口外的历史点不参与当前动画，新采样按更新后的窗口和最小时间间隔追加。
 

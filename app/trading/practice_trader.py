@@ -294,6 +294,7 @@ REALTIME_NEWS_CACHE_FILE = DASHBOARD_HOME / "news" / "realtime_news_latest.json"
 
 def load_dashboard_env() -> None:
     allowed = {
+        "DASHBOARD_CN_DATA_PROXY_URL",
         "IWENCAI_NEWS_PRECHECK_ENABLED",
         "IWENCAI_ENABLED",
         "IWENCAI_BASE_URL",

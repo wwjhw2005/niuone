@@ -9,7 +9,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from pathlib import Path
 from typing import Any
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
+
+# Preserve the historical module-level monkeypatch seam.
+urlopen = data_source_urlopen
 
 if __package__ == "app":
     from .reports.a_share import common as report_common

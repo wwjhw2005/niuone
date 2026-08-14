@@ -18,11 +18,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
 from zoneinfo import ZoneInfo
 
 from dashboard_json_cache import read_json_cache, write_json_cache
 from niuone_paths import get_dashboard_home
+try:
+    from app.market_data.data_source_proxy import (
+        data_source_urlopen,
+        resolve_data_source_proxy_url,
+    )
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import (
+        data_source_urlopen,
+        resolve_data_source_proxy_url,
+    )
 from dashboard.apis.market_retention import (
     MARKET_RETENTION_ROLLOVER_HOUR,
     market_retention_date_key,
@@ -161,6 +171,8 @@ def _download_json(
     for attempt in range(MAX_REQUEST_ATTEMPTS):
         try:
             if curl:
+                proxy_url = resolve_data_source_proxy_url()
+                proxy_args = ["--proxy", proxy_url] if proxy_url else []
                 completed = runner(
                     [
                         curl,
@@ -174,6 +186,7 @@ def _download_json(
                         str(REQUEST_TIMEOUT_SECONDS),
                         "--user-agent",
                         "Mozilla/5.0 NiuOne/1.0",
+                        *proxy_args,
                         url,
                     ],
                     capture_output=True,
@@ -186,7 +199,7 @@ def _download_json(
                 raw = bytes(completed.stdout)
             else:
                 request = Request(url, headers={"User-Agent": "Mozilla/5.0 NiuOne/1.0"})
-                with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                with data_source_urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                     raw = response.read(MAX_RESPONSE_BYTES + 1)
             if len(raw) > MAX_RESPONSE_BYTES:
                 raise RuntimeError("industry main-flow response is too large")

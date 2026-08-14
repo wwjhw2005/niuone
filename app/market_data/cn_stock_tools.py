@@ -8,6 +8,11 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
+try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
+
 EASTMONEY_QUOTE = "https://push2.eastmoney.com/api/qt/stock/get"
 TENCENT_KLINE = "https://ifzq.gtimg.cn/appstock/app/fqkline/get"
 TENCENT_QUOTE = "https://qt.gtimg.cn/q="
@@ -26,7 +31,7 @@ def http_get_json(url, params, retries=3, sleep_seconds=1.2):
     for attempt in range(1, retries + 1):
         try:
             req = urllib.request.Request(full, headers=headers)
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with data_source_urlopen(req, timeout=20) as resp:
                 return json.loads(resp.read().decode("utf-8", "ignore"))
         except Exception as e:
             last_error = e
@@ -106,7 +111,7 @@ def get_quote(symbol):
         }
     except Exception:
         req = urllib.request.Request(TENCENT_QUOTE + sym["display"], headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with data_source_urlopen(req, timeout=20) as resp:
             text = resp.read().decode("gbk", "ignore")
         parts = text.split('="', 1)[-1].rstrip('";').split('~')
         if len(parts) < 38:

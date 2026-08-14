@@ -10,6 +10,11 @@ import time
 import urllib.request
 from pathlib import Path
 
+try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
+
 from dashboard_json_cache import read_json_cache, write_json_cache
 from niuone_paths import get_dashboard_home
 
@@ -70,7 +75,7 @@ def _ak_rows():
 def _fallback_rows():
     url = 'https://qt.gtimg.cn/q=' + ','.join(c for c, _ in FALLBACK_CODES)
     try:
-        text = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=8).read().decode('gbk', 'ignore')
+        text = data_source_urlopen(urllib.request.Request(url, headers=UA), timeout=8).read().decode('gbk', 'ignore')
     except Exception:
         return []
     rows = []

@@ -73,6 +73,7 @@ Compose 内置 NewsNow 的数据库和缓存位于独立 Docker volume `newsnow-
 模型及 FMP 密钥只允许保存在 `.local-data/dashboard.env`、`.local-data/runtime/config.yaml` 或受控的系统环境变量中。提交前必须确认没有新增 `.env`、`*.key`、`*.token`、`*.secret`、数据库或备份文件。
 
 问财数据源使用 `IWENCAI_API_KEY`，同样只允许保存到 `.local-data/dashboard.env` 或受控系统环境变量。
+海外部署可通过 `DASHBOARD_CN_DATA_PROXY_URL=socks5h://host:port` 仅代理腾讯、东方财富、新浪和问财等国内数据源；该地址不得包含用户名、密码、查询参数或路径。配置代理后连接失败必须沿用有界超时、重试与缓存降级，不得静默改为直连。Docker Compose 会把回环代理主机映射为宿主机 `host.docker.internal`。模型、通知、FMP 和 NewsNow 不使用此配置。
 `IWENCAI_ENABLED` 默认关闭；问财数据仅作为研究快照和现有行情的补充，不得用不完整或缓存响应覆盖账户、成交和真实交易记录。
 `IWENCAI_NEWS_PRECHECK_ENABLED=1` 启用消息面预检：系统组合调用问财官方 `announcement-search`、`news-search` 和 `hithink-event-query` 检索证据，不包含雪球/X 舆情。公告和新闻走 `/v1/comprehensive/search`，结构化事件走 `/v1/query2data`；结果按股票身份及最近 3 天过滤并跨来源去重。存在有效证据时，必须复用 `DASHBOARD_DECISION_*` 买卖决策模型判断利好、利空或中性；无有效证据时直接记为中性，不调用模型。模型未配置、超时或输出不可解析时标记判断不可用，不得回退关键词匹配。预检失败、超时、未检查、待判断或不可用的记录不进入买卖决策消息证据，在候选摘要中统一映射为中性、权重 0，不得因缺失辅助信息降分、降优先级、缩仓或单独阻止买卖。每个问财技能独立保留成功、证据数和非敏感错误码；不得把价格或资金流当作消息证据。旧 `DASHBOARD_NEWS_*` 配置不再读取。
 龙虎榜任务默认在 A 股交易日北京时间 18:00 更新；只保留最近一次非空成功响应，并在下一次成功查询后原子替换。失败或空结果必须继续保留上一份有效数据。升级前生成的交易日归档会在下一次成功更新后清理；买卖前五席位明细单独失败时，仅在查询日期相同时保留当前快照中已有的机构、营业部及其他有效席位记录。

@@ -22,8 +22,10 @@ from typing import Any
 
 try:
     from app.core.paths import get_dashboard_home
+    from app.market_data.data_source_proxy import data_source_urlopen
 except ImportError:  # pragma: no cover - legacy top-level import path
     from core.paths import get_dashboard_home
+    from market_data.data_source_proxy import data_source_urlopen
 
 
 SCHEMA_VERSION = 2
@@ -192,7 +194,7 @@ def fetch_tencent_daily_klines(
     url = f"{TENCENT_KLINE_URL}?param={normalized_symbol},day,,,{bounded_count},qfq"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=max(1.0, float(timeout_seconds))) as response:
+        with data_source_urlopen(request, timeout=max(1.0, float(timeout_seconds))) as response:
             payload = json.loads(response.read().decode("utf-8", "ignore"))
         symbol_payload = (payload.get("data") or {}).get(normalized_symbol) or {}
         raw_rows = symbol_payload.get("day") or symbol_payload.get("qfqday") or []

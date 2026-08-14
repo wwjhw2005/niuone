@@ -168,6 +168,7 @@ The **Market Data and Fund-Flow Settings** page groups index refresh and industr
 
 | Setting | Default | Allowed range | Application |
 |---|---:|---:|---|
+| `DASHBOARD_CN_DATA_PROXY_URL` | Empty | Credential-free `socks5h://host:port` | Hot-applied; mainland-China market data and iWencai only |
 | `DASHBOARD_INDICES_TTL_SECONDS` | `60` | Greater than 0 seconds | Hot-applied |
 | `DASHBOARD_NIUONE_MAINLINE_MINUTE_REFRESH_ENABLED` | `1` | `0` or `1` | Dashboard restart required |
 | `DASHBOARD_MARKET_BREADTH_SAMPLE_INTERVAL_SECONDS` | `30` | `30`–`600` seconds | Dashboard restart required |
@@ -178,6 +179,8 @@ The **Market Data and Fund-Flow Settings** page groups index refresh and industr
 | `DASHBOARD_INDUSTRY_FLOW_MORNING_END` | `11:31` | China-time `HH:MM` | Hot-applied; used by the next sampler check |
 | `DASHBOARD_INDUSTRY_FLOW_AFTERNOON_START` | `13:00` | China-time `HH:MM` | Hot-applied; used by the next sampler check |
 | `DASHBOARD_INDUSTRY_FLOW_AFTERNOON_END` | `15:01` | China-time `HH:MM` | Hot-applied; used by the next sampler check |
+
+Overseas deployments may set `DASHBOARD_CN_DATA_PROXY_URL`, for example `socks5h://127.0.0.1:10800`, for Tencent, Eastmoney, Sina, and iWencai requests. DNS resolution happens at the proxy. Model, notification, FMP, and NewsNow traffic is unaffected. In Docker Compose, a configured loopback proxy host is translated to `host.docker.internal`, for which the Compose file declares a host mapping. If the proxy is unavailable, existing bounded timeouts, retries, and cache fallbacks apply; the request does not silently bypass the configured proxy.
 
 By default, industry fund flow is sampled only on A-share trading days during 09:25–11:31 and 13:00–15:01 China time. All four boundaries can be edited on the settings page and must satisfy morning start < morning end < afternoon start < afternoon end. Changing the window or interval does not delete stored real samples; points outside the active window are excluded from playback, and new samples follow the updated window and minimum spacing.
 

@@ -12,7 +12,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
 
 from app.core.json_cache import read_json_cache, write_json_cache
 
@@ -92,7 +97,7 @@ def _download_kline(secid: str, interval_minutes: int, limit: int, timeout: floa
     last_error: Exception | None = None
     for attempt in range(REQUEST_ATTEMPTS):
         try:
-            with urlopen(request, timeout=max(1.0, timeout)) as response:
+            with data_source_urlopen(request, timeout=max(1.0, timeout)) as response:
                 return response.read().decode("utf-8", errors="ignore")
         except Exception as exc:
             last_error = exc

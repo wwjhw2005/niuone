@@ -24,7 +24,15 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+
+try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
+
+# Preserve the historical module-level monkeypatch seam.
+urlopen = data_source_urlopen
 
 from niuone_paths import get_dashboard_home
 

@@ -175,6 +175,7 @@ By default, runtime data is stored in:
 | `DASHBOARD_KLINE_BOOTSTRAP_ENABLED` | `1` | Prepare full-market daily K lines immediately after a first deployment or cache expiry; requires a restart |
 | `DASHBOARD_KLINE_READINESS_MIN_COVERAGE_PERCENT` | `90` | Valid-date daily-K-line coverage required to admit a Practice scan, from 90 through 100; requires a restart |
 | `DASHBOARD_TENCENT_QUOTE_STAGE_TIMEOUT_SECONDS` | `90` | Aggregate budget for the full-market live-quote stage, from 15 through 300 seconds; requires a restart |
+| `DASHBOARD_CN_DATA_PROXY_URL` | Empty | Optional credential-free `socks5h://host:port` proxy for mainland-China data sources; hot-applied, with loopback translated to the Docker host |
 | `DASHBOARD_MANUAL_DATA_INITIALIZATION_TIMEOUT_SECONDS` | `660` | Maximum seconds a manual task waits for daily-K-line initialization; requires a restart |
 | `DASHBOARD_DECISION_INTELLIGENCE_ENABLED` | `1` | Whether to enable the global intelligence bundle for trading decisions |
 | `DASHBOARD_TRADE_DISCIPLINE_TEXT` | Empty | Trading-discipline text for the trading-decision prompt; the built-in default discipline is used when empty |

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 import time
-import urllib.request
 from typing import Any, Mapping
 
 from market_data.iwencai_client import (
@@ -63,7 +62,7 @@ def _error_message(exc: IwencaiError) -> str:
 def test_iwencai_connection(
     values: Mapping[str, Any],
     *,
-    opener=urllib.request.urlopen,
+    opener=None,
     semaphore: threading.BoundedSemaphore | None = None,
     monotonic=time.monotonic,
 ) -> dict[str, Any]:
@@ -87,7 +86,9 @@ def test_iwencai_connection(
         max_retries=0,
         max_concurrency=1,
     )
-    client_kwargs: dict[str, Any] = {"opener": opener, "sleep": lambda _seconds: None}
+    client_kwargs: dict[str, Any] = {"sleep": lambda _seconds: None}
+    if opener is not None:
+        client_kwargs["opener"] = opener
     if semaphore is not None:
         client_kwargs["semaphore"] = semaphore
     client = IwencaiClient(test_config, **client_kwargs)

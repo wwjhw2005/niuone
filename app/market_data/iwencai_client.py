@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
+try:
+    from app.market_data.data_source_proxy import data_source_urlopen
+except ImportError:  # pragma: no cover - legacy top-level import path
+    from market_data.data_source_proxy import data_source_urlopen
+
 
 DEFAULT_BASE_URL = "https://openapi.iwencai.com"
 QUERY_PATH = "/v1/query2data"
@@ -149,7 +154,7 @@ class IwencaiClient:
         semaphore: threading.BoundedSemaphore | None = None,
     ):
         self.config = config
-        self._opener = opener or urllib.request.urlopen
+        self._opener = opener or data_source_urlopen
         self._sleep = sleep
         self._semaphore = semaphore or _shared_semaphore(config.max_concurrency)
 

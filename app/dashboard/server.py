@@ -120,6 +120,7 @@ from market_data.iwencai_client import (
     DEFAULT_BASE_URL as IWENCAI_DEFAULT_BASE_URL,
     normalize_base_url as normalize_iwencai_base_url,
 )
+from market_data.data_source_proxy import normalize_data_source_proxy_url
 from market_data.fmp_ratings import (
     FmpRatingsError,
     normalize_base_url as normalize_fmp_base_url,
@@ -877,6 +878,7 @@ ENV_CONFIG_SCHEMA: list[dict[str, Any]] = [
     {"name": "DASHBOARD_US_RATING_CRON", "label": "美股买入评级时间", "group": "美股机构评级", "kind": "cron_time", "default": "0 6 * * *", "effect": "next_run"},
     {"name": "US_RATING_DEADLINE_SECONDS", "label": "美股评级总超时秒数", "group": "美股机构评级", "kind": "int", "default": "120", "effect": "next_run"},
     {"name": "US_RATING_REQUEST_TIMEOUT_SECONDS", "label": "FMP 单次请求超时秒数", "group": "美股机构评级", "kind": "int", "default": "30", "effect": "next_run"},
+    {"name": "DASHBOARD_CN_DATA_PROXY_URL", "label": "国内数据源 SOCKS5H 代理", "group": "行情与资金流设置", "kind": "text", "default": "", "effect": "runtime"},
     {"name": "DASHBOARD_INDICES_TTL_SECONDS", "label": "指数行情更新间隔（秒）", "group": "行情与资金流设置", "kind": "int", "default": "60", "effect": "runtime", "min": "1"},
     {"name": "DASHBOARD_INDUSTRY_FLOW_PLAYBACK_SPEED", "label": "资金流默认播放速度", "group": "行情与资金流设置", "kind": "playback_speed", "default": "0.5", "effect": "runtime"},
     {"name": "DASHBOARD_INDUSTRY_FLOW_SIDE_LIMIT", "label": "资金流每侧行业数量", "group": "行情与资金流设置", "kind": "int", "default": "10", "effect": "runtime", "min": "1", "max": "10"},
@@ -900,6 +902,7 @@ ADMIN_VISIBLE_ENV_NAMES = [
     "DASHBOARD_B1_SCAN_TIMEOUT_SECONDS",
     "DASHBOARD_B1_SCAN_WORKERS",
     "DASHBOARD_TENCENT_QUOTE_STAGE_TIMEOUT_SECONDS",
+    "DASHBOARD_CN_DATA_PROXY_URL",
     "DASHBOARD_KLINE_CACHE_ENABLED",
     "DASHBOARD_KLINE_PREWARM_ENABLED",
     "DASHBOARD_KLINE_PREWARM_TIME",
@@ -6667,6 +6670,8 @@ def normalize_business_updates(updates: dict[str, str]) -> dict[str, str]:
             normalized[name] = ",".join(parse_newsnow_source_ids(normalized[name]))
         elif name == "IWENCAI_BASE_URL":
             normalized[name] = normalize_iwencai_base_url(normalized[name])
+        elif name == "DASHBOARD_CN_DATA_PROXY_URL":
+            normalized[name] = normalize_data_source_proxy_url(normalized[name])
         elif ENV_CONFIG_BY_NAME.get(name, {}).get("kind") == "time_list":
             normalized[name] = normalize_time_list_update(normalized[name])
         elif ENV_CONFIG_BY_NAME.get(name, {}).get("kind") == "time":
@@ -6758,6 +6763,8 @@ def validate_business_updates(updates: dict[str, str]) -> None:
                 raise ValueError(f"{name} 必须在 {minimum} 到 {maximum} 之间")
         elif name == "IWENCAI_BASE_URL":
             normalize_iwencai_base_url(value)
+        elif name == "DASHBOARD_CN_DATA_PROXY_URL":
+            normalize_data_source_proxy_url(value)
         elif name in {
             "IWENCAI_TIMEOUT_SECONDS",
             "IWENCAI_MAX_RETRIES",
@@ -6998,6 +7005,14 @@ def sync_business_runtime_settings(
             applied.append("indices_ttl")
         except (TypeError, ValueError):
             pass
+
+    if "DASHBOARD_CN_DATA_PROXY_URL" in changed_names:
+        invalidate_api_cache("indices")
+        invalidate_api_cache("sectors")
+        invalidate_api_cache_prefix("hot_stocks:")
+        invalidate_api_cache("money_flow")
+        invalidate_api_cache_prefix("iwencai_dragon_tiger:")
+        applied.append("cn_data_proxy")
 
     industry_flow_names = {
         "DASHBOARD_INDUSTRY_FLOW_PLAYBACK_SPEED",
