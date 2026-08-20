@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import datetime as dt
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -428,6 +429,149 @@ class EastmoneyTurnoverTests(unittest.TestCase):
         self.assertEqual(result["actual_turnover_yi"], 4_900)
         self.assertNotIn("estimated_turnover_yi", result)
         self.assertIn("turnover_estimate_warning", result)
+
+    def test_daily_close_series_sums_common_prior_days_and_caches(self):
+        bodies = {
+            "1.000001": kline_body("1.000001", [
+                "2026-06-29,1,1,1,1,10,1100000000000.00,0.1",
+                "2026-06-30,1,1,1,1,10,1200000000000.00,0.1",
+                "2026-07-01,1,1,1,1,10,100000000.00,0.1",
+            ]),
+            "0.399001": kline_body("0.399001", [
+                "2026-06-29,1,1,1,1,10,900000000000.00,0.1",
+                "2026-06-30,1,1,1,1,10,800000000000.00,0.1",
+                "2026-07-01,1,1,1,1,10,100000000.00,0.1",
+            ]),
+        }
+        calls = []
+        eastmoney_turnover._DAILY_CLOSE_CACHE.clear()
+        try:
+            def downloader(secid, interval, limit, timeout):
+                calls.append((secid, interval, limit, timeout))
+                return bodies[secid]
+
+            first = eastmoney_turnover.fetch_daily_close_turnover_series(
+                dt.date(2026, 7, 1),
+                downloader=downloader,
+                monotonic=lambda: 100.0,
+            )
+            second = eastmoney_turnover.fetch_daily_close_turnover_series(
+                dt.date(2026, 7, 1),
+                downloader=lambda *_args: (_ for _ in ()).throw(
+                    AssertionError("memory cache should avoid a second download")
+                ),
+                monotonic=lambda: 200.0,
+            )
+        finally:
+            eastmoney_turnover._DAILY_CLOSE_CACHE.clear()
+
+        self.assertEqual(first["2026-06-30"], 20_000)
+        self.assertEqual(first["2026-06-29"], 20_000)
+        self.assertNotIn("2026-07-01", first)
+        self.assertEqual(second, first)
+        self.assertEqual({item[1] for item in calls}, {101})
+
+    def test_daily_close_series_failure_reuses_persisted_history(self):
+        eastmoney_turnover._DAILY_CLOSE_CACHE.clear()
+        try:
+            with tempfile.TemporaryDirectory(prefix="niuone-close-series-") as temp_dir:
+                cache_path = Path(temp_dir) / "close.json"
+                cache_path.write_text(json.dumps({
+                    "schema_version": 1,
+                    "series": {"2026-06-30": 18_500.5},
+                }), encoding="utf-8")
+
+                def downloader(*_args):
+                    raise TimeoutError("upstream timeout")
+
+                result = eastmoney_turnover.fetch_daily_close_turnover_series(
+                    dt.date(2026, 7, 1),
+                    downloader=downloader,
+                    persistent_cache_path=cache_path,
+                    monotonic=lambda: 100.0,
+                )
+                repeated = eastmoney_turnover.fetch_daily_close_turnover_series(
+                    dt.date(2026, 7, 1),
+                    downloader=downloader,
+                    persistent_cache_path=cache_path,
+                    monotonic=lambda: 101.0,
+                )
+        finally:
+            eastmoney_turnover._DAILY_CLOSE_CACHE.clear()
+
+        self.assertEqual(result["2026-06-30"], 18_500.5)
+        self.assertEqual(repeated, result)
+
+    def test_opening_estimate_uses_index_close_fill_when_reports_are_short(self):
+        from app.market_data import auction_turnover
+
+        history_days = [
+            (dt.date(2026, 6, 1) + dt.timedelta(days=offset)).isoformat()
+            for offset in range(10)
+        ]
+        bodies = {
+            secid: kline_body(secid, [
+                f"{day},1,1,1,1,10,500000000000.00,0.1"
+                for day in [*history_days, "2026-07-01"]
+            ])
+            for secid in eastmoney_turnover.SECIDS
+        }
+        eastmoney_turnover._DAILY_CLOSE_CACHE.clear()
+        try:
+            with tempfile.TemporaryDirectory(prefix="niuone-opening-close-") as temp_dir:
+                root = Path(temp_dir)
+                state_path = root / "auction.json"
+                state_path.write_text(json.dumps({
+                    "samples": [
+                        {
+                            "date": day,
+                            "captured_at": f"{day} 09:25:02",
+                            "auction_turnover_yi": 100,
+                            "quote_count": 5_100,
+                        }
+                        for day in [*history_days, "2026-07-01"]
+                    ],
+                }), encoding="utf-8")
+                close_path = root / "close.json"
+                close_path.write_text(json.dumps({
+                    "samples": [
+                        {
+                            "date": day,
+                            "captured_at": f"{day} 15:00:08",
+                            "turnover_yi": 10_000,
+                            "quote_count": 5_200,
+                        }
+                        for day in history_days[:-1]
+                    ],
+                }), encoding="utf-8")
+                db_path = root / "reports.db"
+                sqlite3.connect(db_path).close()
+
+                result = eastmoney_turnover.fetch_market_turnover_estimate(
+                    dt.datetime(2026, 7, 1, 9, 31),
+                    200,
+                    auction_profile_fetcher=lambda day: auction_turnover.fetch_auction_turnover_profile(
+                        day,
+                        db_path=db_path,
+                        state_path=state_path,
+                        close_state_path=close_path,
+                        close_series_fetcher=lambda _day: (
+                            eastmoney_turnover.fetch_daily_close_turnover_series(
+                                _day,
+                                downloader=lambda secid, *_args: bodies[secid],
+                            )
+                        ),
+                    ),
+                    current_fetcher=lambda _moment: 200,
+                    profile_fetcher=lambda _date: (_ for _ in ()).throw(
+                        AssertionError("opening window should not use the 20-day profile")
+                    ),
+                )
+        finally:
+            eastmoney_turnover._DAILY_CLOSE_CACHE.clear()
+
+        self.assertEqual(result["estimated_turnover_yi"], 10_000)
+        self.assertEqual(result["turnover_profile_days"], 10)
 
 
 if __name__ == "__main__":

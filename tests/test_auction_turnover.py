@@ -144,6 +144,138 @@ class AuctionTurnoverTests(unittest.TestCase):
         self.assertEqual(auction["2026-06-30"], 100)
         self.assertEqual(close["2026-06-30"], 10_000)
 
+    def test_loads_structured_close_sample_without_message_database(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            close_path = root / "close.json"
+            auction_turnover.persist_close_turnover_sample(
+                generated_at="2026-06-30 15:00:08",
+                turnover_yi=12_345.67,
+                quote_count=5_200,
+                path=close_path,
+            )
+            auction, close = auction_turnover.load_turnover_report_series(
+                db_path=root / "missing.db",
+                state_path=root / "missing-auction.json",
+                close_state_path=close_path,
+            )
+
+        self.assertEqual(auction, {})
+        self.assertEqual(close["2026-06-30"], 12_345.67)
+
+    def test_skips_intraday_close_samples_before_the_session_end(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "close.json"
+            self.assertIsNone(
+                auction_turnover.persist_close_turnover_sample(
+                    generated_at="2026-06-30 14:59:59",
+                    turnover_yi=12_000,
+                    quote_count=5_200,
+                    path=path,
+                )
+            )
+            self.assertFalse(path.exists())
+
+    def test_index_close_series_fills_missing_report_days_for_opening_profile(self):
+        start = dt.date(2026, 6, 1)
+        auction_days = [
+            (start + dt.timedelta(days=offset)).isoformat()
+            for offset in range(10)
+        ]
+        missing_day = auction_days[-1]
+        report_close_days = auction_days[:-1]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            state_path = root / "auction.json"
+            state_path.write_text(json.dumps({
+                "samples": [
+                    {
+                        "date": day,
+                        "captured_at": f"{day} 09:25:02",
+                        "auction_turnover_yi": 120 if day == "2026-07-01" else 100,
+                        "quote_count": 5_100,
+                    }
+                    for day in [*auction_days, "2026-07-01"]
+                ],
+            }), encoding="utf-8")
+            close_path = root / "close.json"
+            close_path.write_text(json.dumps({
+                "samples": [
+                    {
+                        "date": day,
+                        "captured_at": f"{day} 15:00:08",
+                        "turnover_yi": 10_000,
+                        "quote_count": 5_200,
+                    }
+                    for day in report_close_days
+                ],
+            }), encoding="utf-8")
+            db_path = root / "reports.db"
+            sqlite3.connect(db_path).close()
+            profile = auction_turnover.fetch_auction_turnover_profile(
+                dt.date(2026, 7, 1),
+                db_path=db_path,
+                state_path=state_path,
+                close_state_path=close_path,
+                close_series_fetcher=lambda _day: {
+                    missing_day: 10_000,
+                    "2026-07-01": 99_999,
+                },
+            )
+
+        self.assertEqual(profile["profile_days"], 10)
+        self.assertEqual(profile["historical_turnover_median_yi"], 10_000)
+        self.assertNotIn("2026-07-01", [row["date"] for row in profile["daily_profiles"]])
+
+    def test_local_close_records_win_over_index_fill(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            close_path = root / "close.json"
+            auction_turnover.persist_close_turnover_sample(
+                generated_at="2026-06-30 15:00:08",
+                turnover_yi=11_000,
+                quote_count=5_200,
+                path=close_path,
+            )
+            state_path = root / "auction.json"
+            state_path.write_text(json.dumps({
+                "samples": [{
+                    "date": "2026-07-01",
+                    "captured_at": "2026-07-01 09:25:02",
+                    "auction_turnover_yi": 120,
+                    "quote_count": 5_100,
+                }]
+                + [
+                    {
+                        "date": f"2026-06-{day:02d}",
+                        "captured_at": f"2026-06-{day:02d} 09:25:02",
+                        "auction_turnover_yi": 100,
+                        "quote_count": 5_100,
+                    }
+                    for day in range(20, 31)
+                ],
+            }), encoding="utf-8")
+            db_path = root / "reports.db"
+            sqlite3.connect(db_path).close()
+            profile = auction_turnover.fetch_auction_turnover_profile(
+                dt.date(2026, 7, 1),
+                db_path=db_path,
+                state_path=state_path,
+                close_state_path=close_path,
+                close_series_fetcher=lambda _day: {
+                    f"2026-06-{day:02d}": 9_000
+                    for day in range(20, 31)
+                },
+            )
+
+        close_by_date = {
+            row["date"]: row["turnover_yi"]
+            for row in profile["daily_profiles"]
+        }
+        self.assertEqual(close_by_date["2026-06-30"], 11_000)
+        self.assertEqual(close_by_date["2026-06-29"], 9_000)
+
 
 if __name__ == "__main__":
     unittest.main()

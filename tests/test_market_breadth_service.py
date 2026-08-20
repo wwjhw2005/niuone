@@ -1201,13 +1201,24 @@ class MarketBreadthHistoryTests(unittest.TestCase):
 
     def test_dashboard_estimate_injects_persistent_profile_cache_path(self):
         original_cache_file = dashboard.TURNOVER_PROFILE_CACHE_FILE
+        original_close_file = dashboard.CLOSE_TURNOVER_CACHE_FILE
         try:
             with tempfile.TemporaryDirectory(prefix="niuone-turnover-profile-") as temp_dir:
                 cache_path = Path(temp_dir) / "profile.json"
+                close_path = Path(temp_dir) / "close.json"
                 dashboard.TURNOVER_PROFILE_CACHE_FILE = cache_path
+                dashboard.CLOSE_TURNOVER_CACHE_FILE = close_path
 
-                def estimate(generated_at, fallback_actual, *, profile_fetcher):
+                def estimate(
+                    generated_at,
+                    fallback_actual,
+                    *,
+                    profile_fetcher,
+                    auction_profile_fetcher=None,
+                ):
                     profile_fetcher(generated_at.date())
+                    if auction_profile_fetcher is not None:
+                        auction_profile_fetcher(generated_at.date())
                     return {"actual_turnover_yi": fallback_actual}
 
                 with patch.object(
@@ -1218,7 +1229,11 @@ class MarketBreadthHistoryTests(unittest.TestCase):
                     dashboard,
                     "fetch_turnover_profile",
                     return_value={"profile_days": 20},
-                ) as profile_fetch:
+                ) as profile_fetch, patch.object(
+                    dashboard,
+                    "fetch_auction_turnover_profile_with_index_close",
+                    return_value={"profile_days": 10},
+                ) as auction_fetch:
                     result = (
                         dashboard._fetch_market_turnover_estimate_with_persistent_profile(
                             datetime(2026, 7, 22, 10, 0),
@@ -1231,8 +1246,46 @@ class MarketBreadthHistoryTests(unittest.TestCase):
                     datetime(2026, 7, 22).date(),
                     persistent_cache_path=cache_path,
                 )
+                auction_fetch.assert_called_once_with(
+                    datetime(2026, 7, 22).date(),
+                    persistent_cache_path=close_path,
+                )
         finally:
             dashboard.TURNOVER_PROFILE_CACHE_FILE = original_cache_file
+            dashboard.CLOSE_TURNOVER_CACHE_FILE = original_close_file
+
+    def test_session_end_snapshot_persists_structured_close_turnover(self):
+        original_history_file = dashboard.MARKET_BREADTH_HISTORY_FILE
+        try:
+            with tempfile.TemporaryDirectory(prefix="niuone-close-sample-") as temp_dir:
+                dashboard.MARKET_BREADTH_HISTORY_FILE = Path(temp_dir) / "history.json"
+                with patch.object(
+                    dashboard,
+                    "persist_close_turnover_sample",
+                ) as persist:
+                    dashboard.record_market_breadth_sample(
+                        {
+                            **sample("2026-07-22 15:00:08", red=3400, green=1600),
+                            "actual_turnover_yi": 25_103.03,
+                        },
+                        now=datetime(2026, 7, 22, 15, 0, 8),
+                    )
+                    dashboard.record_market_breadth_sample(
+                        {
+                            **sample("2026-07-22 10:00:08", red=3200, green=1800),
+                            "actual_turnover_yi": 3_000,
+                        },
+                        now=datetime(2026, 7, 22, 10, 0, 8),
+                    )
+
+                persist.assert_any_call(
+                    generated_at="2026-07-22 15:00:08",
+                    turnover_yi=25_103.03,
+                    quote_count=5_100,
+                )
+                self.assertEqual(persist.call_count, 2)
+        finally:
+            dashboard.MARKET_BREADTH_HISTORY_FILE = original_history_file
 
     def test_producer_retains_previous_valid_sample_when_fetch_fails(self):
         original_history_file = dashboard.MARKET_BREADTH_HISTORY_FILE

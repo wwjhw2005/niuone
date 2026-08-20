@@ -7,9 +7,12 @@ import math
 import re
 import sqlite3
 import statistics
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from app.core.json_cache import write_json_cache
 from app.core.paths import get_dashboard_home
 
 
@@ -21,8 +24,10 @@ MIN_PROFILE_DAYS = 10
 AUCTION_ELASTICITY = 0.5
 MODEL = "auction_shrinkage_opening_5m_intraday_v4"
 MODEL_LABEL = "竞价平方根收缩开盘 + 近20日5分钟日内成交分布"
-SOURCE_NAME = "本地09:25竞价与盘后成交额记录"
+SOURCE_NAME = "本地09:25竞价与全天成交额记录"
 SOURCE_URL = "https://quote.eastmoney.com/"
+CLOSE_SAMPLE_MIN_QUOTES = 4_000
+_CLOSE_SAMPLE_LOCK = threading.Lock()
 
 
 def _finite_float(value: Any) -> float | None:
@@ -112,6 +117,15 @@ def _default_state_path() -> Path:
     )
 
 
+def _default_close_state_path() -> Path:
+    return (
+        get_dashboard_home(PROJECT_ROOT)
+        / "cron"
+        / "state"
+        / "a_share_close_turnover.json"
+    )
+
+
 def _structured_auction_series(path: Path) -> dict[str, float]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -140,18 +154,110 @@ def _structured_auction_series(path: Path) -> dict[str, float]:
     return result
 
 
+def _structured_close_series(path: Path) -> dict[str, float]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
+    samples = payload.get("samples") if isinstance(payload, dict) else None
+    result: dict[str, float] = {}
+    for raw in samples or []:
+        sample = raw if isinstance(raw, dict) else {}
+        day = str(sample.get("date") or "")
+        captured_at = str(sample.get("captured_at") or "")
+        amount = _finite_float(sample.get("turnover_yi"))
+        quote_count = _finite_float(sample.get("quote_count"))
+        captured_clock = _clock(captured_at)
+        if (
+            re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)
+            and captured_at[:10] == day
+            and captured_clock is not None
+            and captured_clock >= dt.time(15, 0)
+            and amount is not None
+            and amount > 0
+            and quote_count is not None
+            and quote_count >= CLOSE_SAMPLE_MIN_QUOTES
+        ):
+            result[day] = amount
+    return result
+
+
+def persist_close_turnover_sample(
+    *,
+    generated_at: dt.datetime | str,
+    turnover_yi: Any,
+    quote_count: Any = None,
+    path: Path | None = None,
+) -> dict[str, Any] | None:
+    """Retain a complete 15:00 full-market amount for opening estimates."""
+
+    if isinstance(generated_at, dt.datetime):
+        moment = generated_at
+        captured_at = moment.strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        captured_at = str(generated_at or "").strip()
+        captured_clock = _clock(captured_at)
+        if captured_clock is None or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+            captured_at,
+        ):
+            return None
+        moment = dt.datetime.strptime(captured_at, "%Y-%m-%d %H:%M:%S")
+    if moment.time() < dt.time(15, 0):
+        return None
+    amount = _finite_float(turnover_yi)
+    quotes = _finite_float(quote_count)
+    if amount is None or amount <= 0 or quotes is None or quotes < CLOSE_SAMPLE_MIN_QUOTES:
+        return None
+    day = moment.date().isoformat()
+    target = path or _default_close_state_path()
+    sample = {
+        "date": day,
+        "captured_at": captured_at
+        if not isinstance(generated_at, dt.datetime)
+        else moment.strftime("%Y-%m-%d %H:%M:%S"),
+        "turnover_yi": round(amount, 2),
+        "quote_count": int(quotes),
+    }
+    with _CLOSE_SAMPLE_LOCK:
+        try:
+            current = json.loads(target.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, ValueError):
+            current = {}
+        by_date: dict[str, dict[str, Any]] = {}
+        for raw in current.get("samples") or [] if isinstance(current, dict) else []:
+            existing = raw if isinstance(raw, dict) else {}
+            existing_day = str(existing.get("date") or "")
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", existing_day):
+                by_date[existing_day] = existing
+        previous = by_date.get(day) if isinstance(by_date.get(day), dict) else {}
+        previous_clock = _clock(previous.get("captured_at"))
+        if previous_clock is not None and previous_clock > moment.time():
+            sample = previous
+        by_date[day] = sample
+        payload = {
+            "schema_version": 1,
+            "source": SOURCE_NAME,
+            "samples": [by_date[key] for key in sorted(by_date)][-60:],
+        }
+        write_json_cache(target, payload)
+    return payload
+
+
 def load_turnover_report_series(
     *,
     db_path: Path | None = None,
     state_path: Path | None = None,
+    close_state_path: Path | None = None,
 ) -> tuple[dict[str, float], dict[str, float]]:
     """Load pure auction and complete close amounts without exposing report text."""
 
     auction = _structured_auction_series(state_path or _default_state_path())
-    close: dict[str, float] = {}
+    close = _structured_close_series(close_state_path or _default_close_state_path())
     path = db_path or _default_db_path()
-    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2.0)
+    connection: sqlite3.Connection | None = None
     try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2.0)
         auction_rows = connection.execute(
             "SELECT time_text, content FROM dashboard_messages "
             "WHERE source_id LIKE ? ORDER BY timestamp",
@@ -183,9 +289,12 @@ def load_turnover_report_series(
                 and clock >= dt.time(15, 0)
                 and amount is not None
             ):
-                close[day] = amount
+                close.setdefault(day, amount)
+    except sqlite3.Error:
+        pass
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
     return auction, close
 
 
@@ -261,20 +370,61 @@ def build_auction_turnover_profile(
     }
 
 
+def _merge_close_series(
+    close: dict[str, float],
+    extra_close: dict[str, float] | None,
+    *,
+    before_date: dt.date,
+) -> dict[str, float]:
+    merged = dict(close)
+    cutoff = before_date.isoformat()
+    for raw_day, raw_amount in (extra_close or {}).items():
+        day = str(raw_day or "")
+        amount = _finite_float(raw_amount)
+        if (
+            re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)
+            and day < cutoff
+            and amount is not None
+            and amount > 0
+        ):
+            merged.setdefault(day, amount)
+    return merged
+
+
 def fetch_auction_turnover_profile(
     before_date: dt.date,
     *,
     db_path: Path | None = None,
     state_path: Path | None = None,
+    close_state_path: Path | None = None,
+    close_series_fetcher: Callable[[dt.date], dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     auction, close = load_turnover_report_series(
         db_path=db_path,
         state_path=state_path,
+        close_state_path=close_state_path,
     )
+    extra_close: dict[str, float] = {}
+    if close_series_fetcher is not None:
+        try:
+            fetched = close_series_fetcher(before_date)
+        except Exception as exc:
+            print(
+                f"[WARN] Index close turnover series unavailable "
+                f"error={type(exc).__name__}",
+                flush=True,
+            )
+        else:
+            if isinstance(fetched, dict):
+                extra_close = fetched
     return build_auction_turnover_profile(
         before_date,
         auction_by_date=auction,
-        close_by_date=close,
+        close_by_date=_merge_close_series(
+            close,
+            extra_close,
+            before_date=before_date,
+        ),
     )
 
 
@@ -284,4 +434,5 @@ __all__ = [
     "extract_close_turnover_yi",
     "fetch_auction_turnover_profile",
     "load_turnover_report_series",
+    "persist_close_turnover_sample",
 ]

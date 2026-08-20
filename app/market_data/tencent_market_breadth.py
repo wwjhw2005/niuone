@@ -19,6 +19,7 @@ from .eastmoney_turnover import (
     FALLBACK_SOURCE_NAME as TURNOVER_FALLBACK_SOURCE_NAME,
     FALLBACK_SOURCE_URL as TURNOVER_FALLBACK_SOURCE_URL,
     fetch_market_turnover_estimate,
+    parse_daily_kline_amounts,
 )
 
 
@@ -107,22 +108,7 @@ def _download_previous_turnover(secid: str, timeout: float) -> str:
 def _parse_daily_turnover_by_date(body: str, secid: str) -> dict[str, float]:
     """Parse Eastmoney daily index turnover amounts as yuan keyed by date."""
 
-    payload = json.loads(str(body or "{}"))
-    data = payload.get("data") if isinstance(payload, dict) else None
-    expected_code = secid.split(".", 1)[-1]
-    if not isinstance(data, dict) or str(data.get("code") or "") != expected_code:
-        raise ValueError(f"Eastmoney turnover response missing index {secid}")
-    result: dict[str, float] = {}
-    for raw in data.get("klines") or []:
-        fields = str(raw or "").split(",")
-        if len(fields) < 7 or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fields[0]):
-            continue
-        amount_yuan = _finite_float(fields[6])
-        if amount_yuan is not None and amount_yuan > 0:
-            result[fields[0]] = amount_yuan
-    if not result:
-        raise ValueError(f"Eastmoney turnover response has no daily amounts for {secid}")
-    return result
+    return parse_daily_kline_amounts(body, secid)
 
 
 def fetch_previous_market_turnover(

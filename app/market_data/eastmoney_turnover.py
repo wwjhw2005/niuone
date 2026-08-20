@@ -42,9 +42,14 @@ CURRENT_FETCH_LIMIT = 300
 REQUEST_ATTEMPTS = 2
 PROFILE_RETRY_SECONDS = 300.0
 PROFILE_CACHE_SCHEMA_VERSION = 1
+DAILY_KLINE_INTERVAL = 101
+DAILY_CLOSE_FETCH_LIMIT = 40
+DAILY_CLOSE_CACHE_SCHEMA_VERSION = 1
 
 _PROFILE_CACHE_LOCK = threading.Lock()
 _PROFILE_CACHE: dict[str, dict[str, Any]] = {}
+_DAILY_CLOSE_CACHE_LOCK = threading.Lock()
+_DAILY_CLOSE_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def _finite_float(value: Any) -> float | None:
@@ -131,6 +136,27 @@ def parse_kline_amounts(body: str, secid: str) -> dict[str, dict[float, float]]:
         result.setdefault(day, {})[progress] = amount_yuan
     if not result:
         raise ValueError(f"Eastmoney turnover response has no minute amounts for {secid}")
+    return result
+
+
+def parse_daily_kline_amounts(body: str, secid: str) -> dict[str, float]:
+    """Parse Eastmoney daily index turnover amounts as yuan keyed by date."""
+
+    payload = json.loads(str(body or "{}"))
+    data = payload.get("data") if isinstance(payload, dict) else None
+    expected_code = secid.split(".", 1)[-1]
+    if not isinstance(data, dict) or str(data.get("code") or "") != expected_code:
+        raise ValueError(f"Eastmoney turnover response missing index {secid}")
+    result: dict[str, float] = {}
+    for raw in data.get("klines") or []:
+        fields = str(raw or "").split(",")
+        if len(fields) < 7 or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fields[0]):
+            continue
+        amount_yuan = _finite_float(fields[6])
+        if amount_yuan is not None and amount_yuan > 0:
+            result[fields[0]] = amount_yuan
+    if not result:
+        raise ValueError(f"Eastmoney turnover response has no daily amounts for {secid}")
     return result
 
 
@@ -435,6 +461,126 @@ def fetch_turnover_profile(
         return dict(profile)
 
 
+def _read_persistent_daily_close(path: Path | None) -> dict[str, float]:
+    if path is None:
+        return {}
+    payload = read_json_cache(path)
+    source = payload if isinstance(payload, dict) else {}
+    if source.get("schema_version") != DAILY_CLOSE_CACHE_SCHEMA_VERSION:
+        return {}
+    series = source.get("series")
+    if not isinstance(series, dict):
+        return {}
+    result: dict[str, float] = {}
+    for raw_day, raw_amount in series.items():
+        day = str(raw_day or "")
+        amount = _finite_float(raw_amount)
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and amount is not None and amount > 0:
+            result[day] = round(amount, 2)
+    return result
+
+
+def _write_persistent_daily_close(path: Path | None, series: dict[str, float]) -> None:
+    if path is None:
+        return
+    write_json_cache(path, {
+        "schema_version": DAILY_CLOSE_CACHE_SCHEMA_VERSION,
+        "saved_at": dt.datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        "series": {
+            day: round(amount, 2)
+            for day, amount in sorted(series.items())
+        },
+    })
+
+
+def fetch_daily_close_turnover_series(
+    before_date: dt.date,
+    *,
+    downloader: Callable[[str, int, int, float], str] = _download_kline,
+    monotonic: Callable[[], float] = time.monotonic,
+    persistent_cache_path: Path | None = None,
+) -> dict[str, float]:
+    """Return Shanghai+Shenzhen daily turnover in 亿元 for dates before today."""
+
+    cache_key = before_date.isoformat()
+    now = monotonic()
+    with _DAILY_CLOSE_CACHE_LOCK:
+        cached = _DAILY_CLOSE_CACHE.get(cache_key)
+        if cached and cached.get("value") is not None:
+            return dict(cached["value"])
+        persisted = _read_persistent_daily_close(persistent_cache_path)
+        if cached and now < float(cached.get("retry_after") or 0):
+            filtered = {
+                day: amount
+                for day, amount in persisted.items()
+                if day < cache_key
+            }
+            if filtered:
+                return filtered
+            raise RuntimeError("Eastmoney daily close turnover is waiting to retry")
+        try:
+            bodies = _download_pair(
+                DAILY_KLINE_INTERVAL,
+                DAILY_CLOSE_FETCH_LIMIT,
+                downloader,
+            )
+            parsed = [
+                parse_daily_kline_amounts(bodies[secid], secid)
+                for secid in SECIDS
+            ]
+            common_dates = set.intersection(*(set(rows) for rows in parsed))
+            fetched = {
+                day: round(sum(rows[day] for rows in parsed) / 100_000_000, 2)
+                for day in common_dates
+                if all(rows[day] > 0 for rows in parsed)
+            }
+        except Exception:
+            _DAILY_CLOSE_CACHE[cache_key] = {
+                "value": None,
+                "retry_after": now + PROFILE_RETRY_SECONDS,
+            }
+            filtered = {
+                day: amount
+                for day, amount in persisted.items()
+                if day < cache_key
+            }
+            if filtered:
+                return filtered
+            raise
+        merged = {
+            day: amount
+            for day, amount in {**persisted, **fetched}.items()
+            if day < cache_key
+        }
+        _DAILY_CLOSE_CACHE.clear()
+        _DAILY_CLOSE_CACHE[cache_key] = {"value": merged, "retry_after": 0.0}
+        try:
+            _write_persistent_daily_close(persistent_cache_path, merged)
+        except (OSError, TypeError, ValueError) as exc:
+            print(
+                f"[WARN] Eastmoney daily close turnover cache write failed "
+                f"error={type(exc).__name__}",
+                flush=True,
+            )
+        return dict(merged)
+
+
+def fetch_auction_turnover_profile_with_index_close(
+    before_date: dt.date,
+    *,
+    persistent_cache_path: Path | None = None,
+) -> dict[str, Any]:
+    """Build the opening auction prior, filling missing close days from daily klines."""
+
+    return fetch_auction_turnover_profile(
+        before_date,
+        close_series_fetcher=lambda day: fetch_daily_close_turnover_series(
+            day,
+            persistent_cache_path=persistent_cache_path,
+        ),
+    )
+
+
 def fetch_current_turnover_yi(
     generated_at: dt.datetime,
     *,
@@ -471,7 +617,7 @@ def fetch_market_turnover_estimate(
     *,
     profile_fetcher: Callable[[dt.date], dict[str, Any]] = fetch_turnover_profile,
     auction_profile_fetcher: Callable[[dt.date], dict[str, Any]] = (
-        fetch_auction_turnover_profile
+        fetch_auction_turnover_profile_with_index_close
     ),
     current_fetcher: Callable[[dt.datetime], float] = fetch_current_turnover_yi,
 ) -> dict[str, Any]:
@@ -540,9 +686,12 @@ def fetch_market_turnover_estimate(
 __all__ = [
     "build_turnover_profile",
     "estimate_full_day_turnover_yi",
+    "fetch_auction_turnover_profile_with_index_close",
     "fetch_current_turnover_yi",
+    "fetch_daily_close_turnover_series",
     "fetch_market_turnover_estimate",
     "fetch_turnover_profile",
+    "parse_daily_kline_amounts",
     "parse_kline_amounts",
     "trading_progress_minutes",
 ]

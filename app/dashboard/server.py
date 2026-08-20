@@ -129,7 +129,9 @@ from market_data.fmp_ratings import (
     FmpRatingsError,
     normalize_base_url as normalize_fmp_base_url,
 )
+from market_data.auction_turnover import persist_close_turnover_sample
 from market_data.eastmoney_turnover import (
+    fetch_auction_turnover_profile_with_index_close,
     fetch_market_turnover_estimate,
     fetch_turnover_profile,
 )
@@ -274,6 +276,7 @@ STOCK_INDUSTRY_CACHE_FILE = CRON_OUTPUT_DIR / "stock_industry_cache.json"
 EASTMONEY_BOARD_CACHE_FILE = CRON_OUTPUT_DIR / "eastmoney_stock_boards.json"
 MONEY_FLOW_SNAPSHOT_FILE = CRON_OUTPUT_DIR / "industry_main_money_flow_cache.json"
 TURNOVER_PROFILE_CACHE_FILE = CRON_OUTPUT_DIR / "turnover_profile_cache.json"
+CLOSE_TURNOVER_CACHE_FILE = CRON_OUTPUT_DIR / "index_close_turnover_cache.json"
 # Main-net samples use a new history file so legacy total-flow observations
 # remain recoverable but can never be replayed under the new metric label.
 INDUSTRY_FLOW_HISTORY_FILE = CRON_OUTPUT_DIR / "industry_main_flow_history.json"
@@ -4490,6 +4493,18 @@ def record_market_breadth_sample(
         )
         if updated != history and updated.get("samples"):
             _persist_market_breadth_history(updated)
+            try:
+                persist_close_turnover_sample(
+                    generated_at=compact.get("generated_at") or "",
+                    turnover_yi=compact.get("actual_turnover_yi"),
+                    quote_count=compact.get("quote_count"),
+                )
+            except Exception as exc:
+                print(
+                    f"[WARN] Close turnover sample persist failed "
+                    f"error={type(exc).__name__}",
+                    flush=True,
+                )
         return [
             sample
             for sample in (updated.get("samples") or [])
@@ -4592,6 +4607,12 @@ def _fetch_market_turnover_estimate_with_persistent_profile(
         profile_fetcher=lambda before_date: fetch_turnover_profile(
             before_date,
             persistent_cache_path=TURNOVER_PROFILE_CACHE_FILE,
+        ),
+        auction_profile_fetcher=lambda before_date: (
+            fetch_auction_turnover_profile_with_index_close(
+                before_date,
+                persistent_cache_path=CLOSE_TURNOVER_CACHE_FILE,
+            )
         ),
     )
 
