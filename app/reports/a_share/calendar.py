@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
-from datetime import date, datetime, timedelta
+from collections.abc import Iterable, Mapping
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,6 +17,8 @@ else:
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DASHBOARD_HOME = get_dashboard_home(PROJECT_ROOT)
+CN_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
+ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 CALENDAR_CACHE_FILE = Path(
     os.environ.get(
         "A_SHARE_TRADING_CALENDAR_CACHE",
@@ -27,9 +31,13 @@ _CACHE_MEMO: dict[str, Any] | None = None
 _REFRESH_ATTEMPTED_YEARS: set[int] = set()
 
 
+def current_cn_date() -> date:
+    return datetime.now(CN_TZ).date()
+
+
 def normalize_date(value: datetime | date | str | None = None) -> date:
     if value is None:
-        return datetime.now().date()
+        return current_cn_date()
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -151,6 +159,50 @@ def fallback_previous_weekday(target: date) -> str:
     while current.weekday() >= 5:
         current -= timedelta(days=1)
     return current.strftime("%Y-%m-%d")
+
+
+def _iso_date(value: Any) -> str:
+    text = str(value or "")[:10]
+    return text if ISO_DATE_RE.fullmatch(text) else ""
+
+
+def accepted_kline_cache_dates(
+    now: datetime | date | str | None = None,
+    *,
+    extra_dates: Iterable[str] = (),
+    status: Mapping[str, Any] | None = None,
+    status_loader: Callable[..., Mapping[str, Any]] | None = None,
+    cache_file: Path | None = None,
+    allow_refresh: bool = False,
+) -> set[str]:
+    """Return completed-bar dates that remain safe for a live K-line scan."""
+    current = normalize_date(now)
+    current_text = current.strftime("%Y-%m-%d")
+    if status is None:
+        try:
+            if status_loader is None:
+                calendar = trading_day_status(
+                    current,
+                    cache_file=cache_file,
+                    allow_refresh=allow_refresh,
+                )
+            else:
+                calendar = status_loader(current, allow_refresh=allow_refresh)
+        except Exception:
+            calendar = {
+                "date": current_text,
+                "is_trading_day": current.weekday() < 5,
+                "previous_trading_day": fallback_previous_weekday(current),
+            }
+    else:
+        calendar = status
+    accepted = {_iso_date(calendar.get("previous_trading_day"))}
+    if not accepted - {""}:
+        accepted.add(fallback_previous_weekday(current))
+    if calendar.get("is_trading_day"):
+        accepted.add(_iso_date(calendar.get("date")) or current_text)
+    accepted.update(_iso_date(value) for value in extra_dates)
+    return {value for value in accepted if value}
 
 
 def trading_day_status(

@@ -309,6 +309,91 @@ class MultiStrategyRuleTests(unittest.TestCase):
         self.assertEqual((current, previous), ("2026-07-27", "2026-07-24"))
         self.assertEqual(status_calls, [("2026-07-27", False)])
 
+    def test_niuone_dates_parse_iso_quote_times_and_recover_previous_weekday(self):
+        current, previous = screen.resolve_niuone_trading_dates(
+            [
+                {"quote": {"quote_time": "2026-08-19 10:05:01"}},
+                {"quote": {"quote_time": "2026/08/19 10:05:02"}},
+            ],
+            status_loader=lambda *_args, **_kwargs: {"previous_trading_day": ""},
+        )
+
+        self.assertEqual((current, previous), ("2026-08-19", "2026-08-18"))
+
+    def test_scan_accepted_kline_dates_keep_previous_close_when_quotes_are_live(self):
+        accepted = screen.scan_accepted_kline_dates(
+            "2026-08-19",
+            "",
+            now=datetime(2026, 8, 19, 10, 5, 0),
+            status_loader=lambda *_args, **_kwargs: {
+                "date": "2026-08-19",
+                "is_trading_day": True,
+                "previous_trading_day": "",
+            },
+        )
+
+        self.assertEqual(accepted, {"2026-08-18", "2026-08-19"})
+
+    def test_ready_cache_coverage_keeps_previous_close_when_live_bars_are_partial(self):
+        from app.market_data import tencent_kline_cache as cache
+
+        def rows_ending(last_day: str) -> list[dict]:
+            series = [
+                {
+                    "date": f"2026-{5 + index // 28:02d}-{index % 28 + 1:02d}",
+                    "open": 10.0,
+                    "close": 10.0,
+                    "high": 10.2,
+                    "low": 9.8,
+                    "volume": 1000,
+                }
+                for index in range(40)
+            ]
+            series[-1]["date"] = last_day
+            return series
+
+        with tempfile.TemporaryDirectory(prefix="niuone-kline-coverage-") as directory:
+            path = Path(directory) / "daily.sqlite3"
+            today_symbols = [f"sh600{index:03d}" for index in range(47)]
+            previous_symbols = [f"sz000{index:03d}" for index in range(53)]
+            cache.store_kline_series(
+                {
+                    **{symbol: rows_ending("2026-08-19") for symbol in today_symbols},
+                    **{symbol: rows_ending("2026-08-18") for symbol in previous_symbols},
+                },
+                path=path,
+            )
+            quotes = {
+                symbol: {"quote_time": "2026-08-19 10:05:01"}
+                for symbol in [*today_symbols, *previous_symbols]
+            }
+            as_of, previous = screen.resolve_quote_trading_dates(
+                quotes,
+                status_loader=lambda *_args, **_kwargs: {"previous_trading_day": ""},
+            )
+            accepted = screen.scan_accepted_kline_dates(
+                as_of,
+                previous,
+                now=datetime(2026, 8, 19, 10, 5, 0),
+                status_loader=lambda *_args, **_kwargs: {
+                    "date": "2026-08-19",
+                    "is_trading_day": True,
+                    "previous_trading_day": "",
+                },
+            )
+            loaded = cache.load_kline_series_map(
+                [*today_symbols, *previous_symbols],
+                path=path,
+                accepted_last_dates=accepted,
+                min_rows=30,
+            )
+            coverage = len(loaded) / 100
+
+        self.assertEqual((as_of, previous), ("2026-08-19", "2026-08-18"))
+        self.assertEqual(accepted, {"2026-08-18", "2026-08-19"})
+        self.assertGreaterEqual(coverage, 0.9)
+        self.assertEqual(len(loaded), 100)
+
     def test_niuone_previous_context_uses_newest_persisted_sample(self):
         with tempfile.TemporaryDirectory(prefix="niuone-context-") as directory:
             root = Path(directory)

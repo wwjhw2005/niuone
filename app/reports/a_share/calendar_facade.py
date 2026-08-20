@@ -21,7 +21,9 @@ _add_local_runtime_site_packages = _calendar.add_local_runtime_site_packages
 _parse_trade_date = _calendar.parse_trade_date
 _fetch_trade_dates_from_akshare = _calendar.fetch_trade_dates_from_akshare
 _cache_has_year = _calendar.cache_has_year
-_fallback_previous_weekday = _calendar.fallback_previous_weekday
+fallback_previous_weekday = _calendar.fallback_previous_weekday
+_fallback_previous_weekday = fallback_previous_weekday
+accepted_kline_cache_dates = _calendar.accepted_kline_cache_dates
 
 
 def load_cached_calendar(cache_file: Path | None = None) -> dict[str, Any]:

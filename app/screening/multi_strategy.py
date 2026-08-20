@@ -45,7 +45,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -68,6 +68,7 @@ from market_data.tencent_kline_cache import (
     load_kline_series_map,
     merge_live_quote,
     prewarm_kline_cache,
+    quote_trade_date,
     store_kline_series,
 )
 from screening.candidate_cache import write_practice_candidates_cache
@@ -827,6 +828,13 @@ def load_previous_niuone_context() -> dict[str, Any] | None:
     return max(candidates, key=lambda item: (item[0], item[1]))[2] if candidates else None
 
 
+_CN_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+def _cn_now() -> datetime:
+    return datetime.now(_CN_TZ).replace(tzinfo=None)
+
+
 def resolve_niuone_trading_dates(
     prepared_items: list[dict[str, Any]],
     *,
@@ -837,10 +845,9 @@ def resolve_niuone_trading_dates(
     date_counts: dict[str, int] = {}
     for item in prepared_items:
         quote = item.get("quote") if isinstance(item.get("quote"), dict) else {}
-        quote_date = re.search(r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})", str(quote.get("quote_time") or ""))
+        quote_date = quote_trade_date(quote)
         if quote_date:
-            value = f"{quote_date.group('year')}-{quote_date.group('month')}-{quote_date.group('day')}"
-            date_counts[value] = date_counts.get(value, 0) + 1
+            date_counts[quote_date] = date_counts.get(quote_date, 0) + 1
             continue
         rows = item.get("rows") if isinstance(item.get("rows"), list) else []
         latest = rows[-1] if rows and isinstance(rows[-1], dict) else {}
@@ -851,7 +858,7 @@ def resolve_niuone_trading_dates(
     if date_counts:
         as_of_date = max(date_counts, key=lambda value: (date_counts[value], value))
     else:
-        as_of_date = (now or datetime.now()).strftime("%Y-%m-%d")
+        as_of_date = (now or _cn_now()).strftime("%Y-%m-%d")
     if status_loader is None:
         from a_share_calendar import trading_day_status
 
@@ -861,7 +868,46 @@ def resolve_niuone_trading_dates(
         previous_trading_day = str(status.get("previous_trading_day") or "")[:10]
     except Exception:
         previous_trading_day = ""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", previous_trading_day):
+        try:
+            from a_share_calendar import fallback_previous_weekday
+
+            previous_trading_day = fallback_previous_weekday(
+                datetime.strptime(as_of_date, "%Y-%m-%d").date()
+            )
+        except Exception:
+            previous_trading_day = ""
     return as_of_date, previous_trading_day
+
+
+def scan_accepted_kline_dates(
+    as_of_date: str,
+    previous_trading_day: str,
+    *,
+    now: datetime | None = None,
+    status_loader: Callable[..., dict[str, Any]] | None = None,
+) -> set[str]:
+    """Union quote dates with the same calendar window the readiness gate uses."""
+    extras = (as_of_date, previous_trading_day)
+    try:
+        from a_share_calendar import accepted_kline_cache_dates
+
+        session_now = now or _cn_now()
+        return accepted_kline_cache_dates(
+            as_of_date or session_now,
+            extra_dates=extras,
+            status_loader=status_loader,
+        ) | accepted_kline_cache_dates(
+            session_now,
+            extra_dates=extras,
+            status_loader=status_loader,
+        )
+    except Exception:
+        return {
+            str(value)[:10]
+            for value in extras
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(value or "")[:10])
+        }
 
 
 def resolve_quote_trading_dates(
@@ -2031,21 +2077,18 @@ def main():
         "evaluated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     })
     if kline_cache_enabled:
-        accepted_cache_dates = {
-            value
-            for value in (scan_as_of_date, scan_previous_trading_day)
-            if value
-        }
+        accepted_cache_dates = scan_accepted_kline_dates(
+            scan_as_of_date,
+            scan_previous_trading_day,
+        )
         try:
             cached_klines_by_symbol = load_kline_series_map(
                 needed_kline_symbols,
                 path=kline_cache_path(),
                 accepted_last_dates=accepted_cache_dates,
-                min_rows=(
-                    prompt_selection_minimum_bars
-                    if prompt_strategy_version is not None
-                    else 30
-                ),
+                # Coverage uses the same 30-bar floor as readiness. Strategy
+                # minimums are enforced later when preparing rows.
+                min_rows=30,
                 count=(
                     prompt_selection_kline_count
                     if prompt_strategy_version is not None

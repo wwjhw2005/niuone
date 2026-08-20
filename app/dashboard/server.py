@@ -23,7 +23,11 @@ from typing import Any, Callable, Iterable
 import urllib.error
 import urllib.request
 
-from a_share_calendar import is_a_share_trading_day as calendar_is_a_share_trading_day, trading_day_status
+from a_share_calendar import (
+    accepted_kline_cache_dates,
+    is_a_share_trading_day as calendar_is_a_share_trading_day,
+    trading_day_status,
+)
 from dashboard_json_cache import (
     read_json_cache,
     read_versioned_json_cache,
@@ -1269,25 +1273,7 @@ def dashboard_trading_day_status(now: datetime | None = None) -> dict[str, Any]:
 
 def accepted_kline_dates_for_dashboard(now: datetime | None = None) -> set[str]:
     """Return dates whose completed history is safe for the next live scan."""
-    current = now or current_cn_datetime()
-    try:
-        calendar = trading_day_status(current, allow_refresh=False)
-    except Exception:
-        calendar = {
-            "date": current.strftime("%Y-%m-%d"),
-            "is_trading_day": current.weekday() < 5,
-            "previous_trading_day": "",
-        }
-    accepted = {
-        str(calendar.get("previous_trading_day") or "")[:10],
-    }
-    if calendar.get("is_trading_day"):
-        accepted.add(str(calendar.get("date") or current.strftime("%Y-%m-%d"))[:10])
-    return {
-        value
-        for value in accepted
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)
-    }
+    return accepted_kline_cache_dates(now or current_cn_datetime())
 
 
 def practice_scan_requires_full_kline_cache() -> bool:

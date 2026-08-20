@@ -69,6 +69,35 @@ class AShareCalendarTests(unittest.TestCase):
         self.assertFalse(weekend["is_trading_day"])
         self.assertFalse(weekday["calendar_cached"])
 
+    def test_accepted_kline_dates_keep_previous_close_on_trading_day(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "calendar.json"
+            cache.write_text(json.dumps({
+                "source": "test",
+                "dates": ["2026-08-17", "2026-08-18", "2026-08-19"],
+            }))
+            accepted = cal.accepted_kline_cache_dates(
+                datetime(2026, 8, 19, 10, 0),
+                extra_dates=["2026-08-19"],
+                cache_file=cache,
+                allow_refresh=False,
+            )
+
+        self.assertEqual(accepted, {"2026-08-18", "2026-08-19"})
+
+    def test_accepted_kline_dates_recover_previous_weekday_when_calendar_omits_it(self):
+        accepted = cal.accepted_kline_cache_dates(
+            datetime(2026, 8, 19, 10, 0),
+            extra_dates=["2026-08-19"],
+            status={
+                "date": "2026-08-19",
+                "is_trading_day": True,
+                "previous_trading_day": "",
+            },
+        )
+
+        self.assertEqual(accepted, {"2026-08-18", "2026-08-19"})
+
 
 if __name__ == "__main__":
     unittest.main()
